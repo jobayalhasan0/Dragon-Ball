@@ -12,43 +12,42 @@
     #status-text {
       position: absolute; bottom: 30px; width: 100%; text-align: center;
       color: #00ffff; font-size: 32px; font-weight: bold;
-      text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff; pointer-events: none;
+      text-shadow: 0 0 10px #00ffff; pointer-events: none;
     }
-    #mic-btn {
+    #start-btn {
       position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
       padding: 12px 24px; background: #00ffff; border: none; font-weight: bold;
       border-radius: 8px; cursor: pointer; z-index: 10; font-size: 16px;
     }
   </style>
 
-  <!-- External Libraries -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
-  <button id="mic-btn">START CAMERA & VOICE</button>
+  <button id="start-btn">START CAMERA & MIC</button>
   <video id="webcam" autoplay playsinline></video>
   <div id="canvas-container"></div>
   <div id="status-text">CLICK BUTTON TO START</div>
 
   <script>
     const statusText = document.getElementById('status-text');
-    const micBtn = document.getElementById('mic-btn');
+    const startBtn = document.getElementById('start-btn');
 
-    // 1. Web Audio Setup
-    let audioContext, analyser, microphone, dataArray;
+    // Web Audio Setup
+    let analyser, dataArray;
     async function initAudio() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         analyser = audioContext.createAnalyser();
-        microphone = audioContext.createMediaStreamSource(stream);
+        const microphone = audioContext.createMediaStreamSource(stream);
         analyser.fftSize = 256;
         microphone.connect(analyser);
         dataArray = new Uint8Array(analyser.frequencyBinCount);
-      } catch (e) { console.log("Audio not available"); }
+      } catch (e) { console.log("Audio Error"); }
     }
 
     function getAudioVolume() {
@@ -59,7 +58,7 @@
       return sum / dataArray.length;
     }
 
-    // 2. Three.js Scene Setup
+    // Three.js Setup
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -67,14 +66,12 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
 
-    // Energy Ball Group
     const ballGroup = new THREE.Group();
     scene.add(ballGroup);
 
     const coreGeo = new THREE.SphereGeometry(0.15, 32, 32);
     const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const coreMesh = new THREE.Mesh(coreGeo, coreMat);
-    ballGroup.add(coreMesh);
+    ballGroup.add(new THREE.Mesh(coreGeo, coreMat));
 
     const outerGeo = new THREE.SphereGeometry(0.25, 32, 32);
     const outerMat = new THREE.MeshBasicMaterial({ color: 0x00dfff, transparent: true, opacity: 0.8, wireframe: true });
@@ -84,16 +81,11 @@
     ballGroup.visible = false;
     camera.position.z = 2;
 
-    // Tracking & Throw Physics Variables
     let isTracking = false;
     let isFired = false;
-    let velocityZ = 0;
-    let velocityX = 0;
-    let velocityY = 0;
+    let prevHandDist = 0;
 
-    let prevHandPos = { x: 0, y: 0, time: Date.now() };
-
-    // 3. MediaPipe Hands
+    // MediaPipe Setup
     const videoElement = document.getElementById('webcam');
     const hands = new Hands({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -107,71 +99,61 @@
     });
 
     hands.onResults((results) => {
-      if (isFired) return; // If ball is already flying, skip tracking
+      if (isFired) return;
 
       if (results.multiHandLandmarks && results.multiHandLandmarks.length === 2) {
-        const h1 = results.multiHandLandmarks[0][0]; // Wrist
-        const h2 = results.multiHandLandmarks[1][0];
+        const h1 = results.multiHandLandmarks[0][0]; // Wrist 1
+        const h2 = results.multiHandLandmarks[1][0]; // Wrist 2
 
         const avgX = (h1.x + h2.x) / 2;
         const avgY = (h1.y + h2.y) / 2;
-        const dist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
+        const currentDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
 
         const currentX = -(avgX - 0.5) * 3.5;
         const currentY = -(avgY - 0.5) * 2.5;
 
-        // Calculate gesture speed (Movement velocity)
-        const now = Date.now();
-        const dt = (now - prevHandPos.time) / 1000;
-        const speedX = (currentX - prevHandPos.x) / (dt || 0.001);
-        const speedY = (currentY - prevHandPos.y) / (dt || 0.001);
-
-        // THROW/BLAST DETECTION: Rapid push forward or rapid hand opening
-        if (Math.abs(speedX) > 4.5 || Math.abs(speedY) > 4.5 || dist > 0.6) {
-          fireBall(speedX, speedY);
+        // BLAST TRIGGER: Hat 2-ti ekbare rapid separate/khule felle
+        if (prevHandDist > 0 && (currentDist - prevHandDist) > 0.18) {
+          fireBall();
           return;
         }
 
-        prevHandPos = { x: currentX, y: currentY, time: now };
+        prevHandDist = currentDist;
 
         ballGroup.position.x = currentX;
         ballGroup.position.y = currentY;
 
-        // Sound scale + Hand distance scale
         const vol = getAudioVolume();
-        const scale = (1 + vol / 15) * Math.max(0.6, dist * 3);
+        const scale = (1 + vol / 12) * Math.max(0.6, currentDist * 3);
         ballGroup.scale.set(scale, scale, scale);
 
         ballGroup.visible = true;
         isTracking = true;
-        statusText.innerText = "CHARGE POWER & PUSH HANDS TO BLAST!";
+        statusText.innerText = "OPEN HANDS QUICKLY TO BLAST!";
       } else {
         if (!isFired) ballGroup.visible = false;
         isTracking = false;
+        prevHandDist = 0;
       }
     });
 
-    // Fire Function (Throw Ball Effect)
-    function fireBall(vx, vy) {
+    function fireBall() {
       isFired = true;
-      velocityX = vx * 0.05;
-      velocityY = vy * 0.05;
-      velocityZ = -0.25; // Fly forward into 3D space
       statusText.innerText = "KAMEHAMEHA BLAST!!!";
     }
 
-    // Reset Ball after Blast
     function resetBall() {
       isFired = false;
       ballGroup.position.set(0, 0, 0);
       ballGroup.scale.set(1, 1, 1);
       ballGroup.visible = false;
+      prevHandDist = 0;
       statusText.innerText = "READY";
     }
 
-    micBtn.addEventListener('click', async () => {
+    startBtn.addEventListener('click', async () => {
       await initAudio();
-      micBtn.style.display = 'none';
+      startBtn.style.display = 'none';
       const cameraUtils = new Camera(videoElement, {
         onFrame: async () => { await hands.send({ image: videoElement }); },
         width: 1280, height: 720
@@ -179,35 +161,24 @@
       cameraUtils.start();
     });
 
-    // 4. Animation Loop
     function animate() {
       requestAnimationFrame(animate);
 
       if (isFired) {
-        // Fly forward & outward
-        ballGroup.position.z += velocityZ;
-        ballGroup.position.x += velocityX;
-        ballGroup.position.y += velocityY;
-        ballGroup.scale.multiplyScalar(1.05); // Grows bigger as it blasts
+        // Ball forward fly & grow
+        ballGroup.position.z -= 0.15;
+        ballGroup.scale.multiplyScalar(1.08);
 
-        // Out of view check
-        if (ballGroup.position.z < -10 || ballGroup.scale.x > 15) {
+        if (ballGroup.position.z < -8 || ballGroup.scale.x > 12) {
           resetBall();
         }
       } else if (isTracking) {
         outerMesh.rotation.y += 0.1;
-        outerMesh.rotation.z += 0.05;
       }
 
       renderer.render(scene, camera);
     }
     animate();
-
-    window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    });
   </script>
 </body>
 </html>
