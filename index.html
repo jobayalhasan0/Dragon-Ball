@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kamehameha AR Beam</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #000; font-family: sans-serif; }
+    #webcam { transform: scaleX(-1); position: absolute; width: 100vw; height: 100vh; object-fit: cover; }
+    #canvas-container { position: absolute; width: 100vw; height: 100vh; pointer-events: none; }
+    #status-text {
+      position: absolute; bottom: 30px; width: 100%; text-align: center;
+      color: #00ffff; font-size: 32px; font-weight: bold;
+      text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff; pointer-events: none;
+    }
+  </style>
+
+  <!-- External Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+  <video id="webcam" autoplay playsinline></video>
+  <div id="canvas-container"></div>
+  <div id="status-text">READY</div>
+
+  <script>
+    const statusText = document.getElementById('status-text');
+    
+    // 1. Three.js Scene Setup
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    container.appendChild(renderer.domElement);
+
+    // Energy Ball (Glow Core)
+    const ballGroup = new THREE.Group();
+    scene.add(ballGroup);
+
+    const coreGeo = new THREE.SphereGeometry(0.15, 32, 32);
+    const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const coreMesh = new THREE.Mesh(coreGeo, coreMat);
+    ballGroup.add(coreMesh);
+
+    const outerGeo = new THREE.SphereGeometry(0.22, 32, 32);
+    const outerMat = new THREE.MeshBasicMaterial({ color: 0x00dfff, transparent: true, opacity: 0.7, wireframe: true });
+    const outerMesh = new THREE.Mesh(outerGeo, outerMat);
+    ballGroup.add(outerMesh);
+
+    // Energy Particles (Lightning Effect)
+    const particleCount = 40;
+    const particleGeo = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    for(let i = 0; i < particleCount * 3; i++) {
+      positions[i] = (Math.random() - 0.5) * 0.5;
+    }
+    particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const particleMat = new THREE.PointsMaterial({ color: 0x00ffff, size: 0.03, transparent: true, opacity: 0.8 });
+    const particles = new THREE.Points(particleGeo, particleMat);
+    ballGroup.add(particles);
+
+    ballGroup.visible = false;
+    camera.position.z = 2;
+
+    // Charge Variables
+    let isCharging = false;
+    let chargeLevel = 0;
+    const chantTexts = ["KA...", "ME...", "HA...", "ME...", "HA!!!"];
+
+    // 2. Hand Tracking
+    const videoElement = document.getElementById('webcam');
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
+    });
+
+    hands.onResults((results) => {
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length === 2) {
+        // Dui hater majhkhaner coordinate ber kora
+        const h1 = results.multiHandLandmarks[0][0]; // Wrist
+        const h2 = results.multiHandLandmarks[1][0];
+
+        const dist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
+
+        // Jokhon 2 ti hat dharakachhi thakbe
+        if (dist < 0.45) {
+          const avgX = (h1.x + h2.x) / 2;
+          const avgY = (h1.y + h2.y) / 2;
+
+          // Screen pos-ke 3D Space-e map kora
+          ballGroup.position.x = -(avgX - 0.5) * 3.5;
+          ballGroup.position.y = -(avgY - 0.5) * 2.5;
+
+          ballGroup.visible = true;
+          isCharging = true;
+        } else {
+          resetCharge();
+        }
+      } else {
+        resetCharge();
+      }
+    });
+
+    function resetCharge() {
+      isCharging = false;
+      chargeLevel = 0;
+      ballGroup.visible = false;
+      ballGroup.scale.set(1, 1, 1);
+      statusText.innerText = "READY";
+    }
+
+    // Camera Start
+    const cameraUtils = new Camera(videoElement, {
+      onFrame: async () => {
+        await hands.send({ image: videoElement });
+      },
+      width: 1280,
+      height: 720
+    });
+    cameraUtils.start();
+
+    // Render & Animation Loop
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (isCharging) {
+        chargeLevel += 0.015;
+        const scale = 1 + chargeLevel * 1.5;
+        ballGroup.scale.set(scale, scale, scale);
+
+        // Text update (KA... ME... HA...)
+        const index = Math.min(Math.floor(chargeLevel * 1.5), chantTexts.length - 1);
+        statusText.innerText = chantTexts[index];
+
+        // Electric effect rotation
+        outerMesh.rotation.y += 0.1;
+        outerMesh.rotation.z += 0.05;
+        particles.rotation.y -= 0.15;
+      }
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Window Resize Handle
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
