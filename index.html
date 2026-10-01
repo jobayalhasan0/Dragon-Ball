@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kamehameha AR Beam</title>
+  <title>Voice & Hand Scaling Kamehameha</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { overflow: hidden; background: #000; font-family: sans-serif; }
@@ -14,6 +14,11 @@
       color: #00ffff; font-size: 32px; font-weight: bold;
       text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff; pointer-events: none;
     }
+    #mic-btn {
+      position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+      padding: 10px 20px; background: #00ffff; border: none; font-weight: bold;
+      border-radius: 8px; cursor: pointer; z-index: 10;
+    }
   </style>
 
   <!-- External Libraries -->
@@ -23,14 +28,44 @@
 </head>
 <body>
 
+  <button id="mic-btn">CLICK TO START AUDIO & CAMERA</button>
   <video id="webcam" autoplay playsinline></video>
   <div id="canvas-container"></div>
-  <div id="status-text">READY</div>
+  <div id="status-text">CLICK BUTTON TO START</div>
 
   <script>
     const statusText = document.getElementById('status-text');
-    
-    // 1. Three.js Scene Setup
+    const micBtn = document.getElementById('mic-btn');
+
+    // 1. Audio Setup (Microphone Volume Tracking)
+    let audioContext, analyser, microphone, dataArray;
+    let audioVolume = 0;
+
+    async function initAudio() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioContext.createAnalyser();
+        microphone = audioContext.createMediaStreamSource(stream);
+        analyser.fftSize = 256;
+        microphone.connect(analyser);
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+      } catch (err) {
+        console.error("Microphone access denied:", err);
+      }
+    }
+
+    function getAudioVolume() {
+      if (!analyser) return 0;
+      analyser.getByteFrequencyData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i];
+      }
+      return sum / dataArray.length; // Normalized volume
+    }
+
+    // 2. Three.js Scene Setup
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -38,7 +73,7 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
 
-    // Energy Ball (Glow Core)
+    // Energy Ball
     const ballGroup = new THREE.Group();
     scene.add(ballGroup);
 
@@ -52,27 +87,26 @@
     const outerMesh = new THREE.Mesh(outerGeo, outerMat);
     ballGroup.add(outerMesh);
 
-    // Energy Particles (Lightning Effect)
-    const particleCount = 40;
+    // Particles
+    const particleCount = 50;
     const particleGeo = new THREE.BufferGeometry();
     const positions = new Float32Array(particleCount * 3);
     for(let i = 0; i < particleCount * 3; i++) {
       positions[i] = (Math.random() - 0.5) * 0.5;
     }
     particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const particleMat = new THREE.PointsMaterial({ color: 0x00ffff, size: 0.03, transparent: true, opacity: 0.8 });
+    const particleMat = new THREE.PointsMaterial({ color: 0x00ffff, size: 0.04, transparent: true, opacity: 0.9 });
     const particles = new THREE.Points(particleGeo, particleMat);
     ballGroup.add(particles);
 
     ballGroup.visible = false;
     camera.position.z = 2;
 
-    // Charge Variables
-    let isCharging = false;
-    let chargeLevel = 0;
-    const chantTexts = ["KA...", "ME...", "HA...", "ME...", "HA!!!"];
+    // Tracking Variables
+    let isTracking = false;
+    let handDistanceFactor = 1;
 
-    // 2. Hand Tracking
+    // 3. MediaPipe Hands Setup
     const videoElement = document.getElementById('webcam');
     const hands = new Hands({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -81,79 +115,83 @@
     hands.setOptions({
       maxNumHands: 2,
       modelComplexity: 1,
-      minDetectionConfidence: 0.6,
-      minTrackingConfidence: 0.6
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
     });
 
     hands.onResults((results) => {
       if (results.multiHandLandmarks && results.multiHandLandmarks.length === 2) {
-        // Dui hater majhkhaner coordinate ber kora
-        const h1 = results.multiHandLandmarks[0][0]; // Wrist
-        const h2 = results.multiHandLandmarks[1][0];
+        const h1 = results.multiHandLandmarks[0][0]; // Wrist 1
+        const h2 = results.multiHandLandmarks[1][0]; // Wrist 2
 
+        // Calculate center point between 2 hands
+        const avgX = (h1.x + h2.x) / 2;
+        const avgY = (h1.y + h2.y) / 2;
+
+        // Distance between hands
         const dist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
 
-        // Jokhon 2 ti hat dharakachhi thakbe
-        if (dist < 0.45) {
-          const avgX = (h1.x + h2.x) / 2;
-          const avgY = (h1.y + h2.y) / 2;
+        // Map position to 3D Space
+        ballGroup.position.x = -(avgX - 0.5) * 3.5;
+        ballGroup.position.y = -(avgY - 0.5) * 2.5;
 
-          // Screen pos-ke 3D Space-e map kora
-          ballGroup.position.x = -(avgX - 0.5) * 3.5;
-          ballGroup.position.y = -(avgY - 0.5) * 2.5;
+        // Hand distance scaling factor
+        handDistanceFactor = Math.max(0.5, dist * 3.5);
 
-          ballGroup.visible = true;
-          isCharging = true;
-        } else {
-          resetCharge();
-        }
+        ballGroup.visible = true;
+        isTracking = true;
       } else {
-        resetCharge();
+        ballGroup.visible = false;
+        isTracking = false;
       }
     });
 
-    function resetCharge() {
-      isCharging = false;
-      chargeLevel = 0;
-      ballGroup.visible = false;
-      ballGroup.scale.set(1, 1, 1);
-      statusText.innerText = "READY";
-    }
+    // Start Everything on Button Click (Browser Auto-play Policy)
+    micBtn.addEventListener('click', async () => {
+      await initAudio();
+      micBtn.style.display = 'none';
+      statusText.innerText = "MAKE SOUND OR MOVE HANDS APART!";
 
-    // Camera Start
-    const cameraUtils = new Camera(videoElement, {
-      onFrame: async () => {
-        await hands.send({ image: videoElement });
-      },
-      width: 1280,
-      height: 720
+      const cameraUtils = new Camera(videoElement, {
+        onFrame: async () => {
+          await hands.send({ image: videoElement });
+        },
+        width: 1280,
+        height: 720
+      });
+      cameraUtils.start();
     });
-    cameraUtils.start();
 
-    // Render & Animation Loop
+    // 4. Animation Loop
     function animate() {
       requestAnimationFrame(animate);
 
-      if (isCharging) {
-        chargeLevel += 0.015;
-        const scale = 1 + chargeLevel * 1.5;
-        ballGroup.scale.set(scale, scale, scale);
+      if (isTracking) {
+        // Sound Level (0 to ~100 scale)
+        const vol = getAudioVolume();
+        const soundScale = 1 + (vol / 15); // Higher sound = bigger ball
 
-        // Text update (KA... ME... HA...)
-        const index = Math.min(Math.floor(chargeLevel * 1.5), chantTexts.length - 1);
-        statusText.innerText = chantTexts[index];
+        // Final Scale = (Sound Impact) * (Hand Gap Impact)
+        const finalScale = soundScale * handDistanceFactor;
 
-        // Electric effect rotation
-        outerMesh.rotation.y += 0.1;
-        outerMesh.rotation.z += 0.05;
-        particles.rotation.y -= 0.15;
+        ballGroup.scale.set(finalScale, finalScale, finalScale);
+
+        // Visual effects rotation
+        outerMesh.rotation.y += 0.08;
+        outerMesh.rotation.z += 0.04;
+        particles.rotation.y -= 0.1;
+
+        if (vol > 20) {
+          statusText.innerText = "CHARGING POWER!!!";
+        } else {
+          statusText.innerText = "READY";
+        }
       }
 
       renderer.render(scene, camera);
     }
     animate();
 
-    // Window Resize Handle
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
